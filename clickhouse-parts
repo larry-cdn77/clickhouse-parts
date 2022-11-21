@@ -1,0 +1,126 @@
+#!/usr/bin/python3
+import datetime
+import os
+import sys
+import matplotlib
+import matplotlib.pyplot
+import clickhouse_driver
+
+if len(sys.argv) != 4:
+    print('''usage: clickhouse-parts HOST DBTABLE OUTFILE
+
+Read system.parts for given db.table and visualise into a PNG file
+
+- only given server, does not extend to other cluster nodes
+- uses native port 9000, default user and empty password
+- recognises disk_name 'hdd' as cold storage''')
+    sys.exit(2)
+
+def parse_system_parts(host, db_table):
+    parts = {}
+    for (
+            pn,
+            level,
+            rows,
+            disk_name
+        ) in clickhouse_driver.Client(
+        host=host, port=9000, user='default', password='').execute('''
+        SELECT
+            partition_id,
+            level,
+            rows,
+            disk_name
+        FROM system.parts
+        WHERE database || '.' || table = '%s'
+        ORDER BY partition, level, rows
+        ''' % db_table):
+        if pn not in parts:
+            parts[pn] = {}
+        if level not in parts[pn]:
+            parts[pn][level] = []
+        parts[pn][level].append((rows, disk_name))
+    return parts
+
+def find_limits(parts):
+    max_level = 0
+    max_rows_per_level = 0
+    for pn in parts.keys():
+        for level in parts[pn].keys():
+            max_level = max([level, max_level])
+            rows_level = 0
+            for (rows, disk_name) in parts[pn][level]:
+                rows_level += rows
+            max_rows_per_level = max([rows_level, max_rows_per_level])
+    keys = list(parts.keys())
+    partition_length = int(keys[1]) - int(keys[0])
+    return (max_level, max_rows_per_level, partition_length)
+
+print('parse system.parts %s %s' % (sys.argv[1], sys.argv[2]))
+parts = parse_system_parts(sys.argv[1], sys.argv[2])
+
+limits = find_limits(parts)
+print('limits', limits)
+
+###############################################################################
+# rendering                                                                   #
+###############################################################################
+
+dimensions_inches = (64, 32)
+mrows_between_parts = 1
+colors = {
+    'default': (1.0, 0.796, 0.792),
+    'hdd': (0.878, 1.0, 0.792)
+}
+
+def render(parts, limits, table, host, outfile):
+    (max_level, max_rows_per_level, partition_length) = limits
+
+    matplotlib.rcParams.update({
+      'font.size': 7
+    })
+    def make_color(label, max_level):
+        (disk_name, level) = label
+        def step_function(level, max_level): # highlight initial levels
+            if level <= 3:
+                return 2 * level / 8.0
+            else:
+                return (6 + (level - 3) * 2 / (max_level - 3)) / 8.0
+        (h, s, v) = matplotlib.colors.rgb_to_hsv(colors[disk_name])
+        return matplotlib.colors.hsv_to_rgb((h, s,
+            v * step_function(level, max_level)))
+
+    f, a = matplotlib.pyplot.subplots(figsize=dimensions_inches)
+    a.set_title('Parts in partitions: %s (%s)' % (table, host))
+
+    bars = {}
+    scale = 1e+9
+    for pn in parts.keys():
+        y = 0
+        for level in parts[pn].keys():
+            for (rows, disk_name) in parts[pn][level]:
+                label = (disk_name, level)
+                if label not in bars:
+                    bars[label] = {'x': [], 'h': [], 'y': []}
+                bars[label]['x'].append(datetime.datetime.fromtimestamp(int(pn)))
+                bars[label]['h'].append(rows / scale)
+                bars[label]['y'].append(y / scale)
+                y += rows + mrows_between_parts * 1e+6
+
+    for label in bars.keys():
+        a.bar(bars[label]['x'],
+            bars[label]['h'],
+            datetime.timedelta(seconds=(partition_length * 0.85)),
+            bars[label]['y'],
+            color=make_color(label, max_level),
+            label=('%s level %d' % label))
+
+    a.xaxis_date()
+    a.set_xlabel('partition')
+    a.set_ylabel('part size [B rows]')
+    f.legend(loc='upper left', bbox_to_anchor=(0.13, 0.87))
+    f.savefig(outfile, bbox_inches='tight')
+    f.clf()
+    matplotlib.pyplot.close(f)
+
+print('render %s' % sys.argv[3])
+render(parts, limits, sys.argv[2], sys.argv[1], sys.argv[3])
