@@ -1,5 +1,7 @@
 # ClickHouse Parts Chart
 
+![Screenshot](screenshot-small.png)
+
 ## Prerequisites
 
 Matplotlib and ClickHouse Driver library, eg:
@@ -20,7 +22,6 @@ Or, using daemontools:
 
 ```shell
 #!/bin/sh
-PATH=/usr/bin
 while sleep 600 ; do
   curl -sG http://clickhouse.local:8123 --data-urlencode \
     "query=SHOW TABLES" | grep whitelist | grep -v blacklist | \

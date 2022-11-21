@@ -43,17 +43,17 @@ def parse_system_parts(host, db_table):
 
 def find_limits(parts):
     max_level = 0
-    max_rows_per_level = 0
+    max_rows_in_partition = 0
     for pn in parts.keys():
         for level in parts[pn].keys():
             max_level = max([level, max_level])
             rows_level = 0
             for (rows, disk_name) in parts[pn][level]:
                 rows_level += rows
-            max_rows_per_level = max([rows_level, max_rows_per_level])
+        max_rows_in_partition = max([rows_level, max_rows_in_partition])
     keys = list(parts.keys())
     partition_length = int(keys[1]) - int(keys[0])
-    return (max_level, max_rows_per_level, partition_length)
+    return (max_level, max_rows_in_partition, partition_length)
 
 print('parse system.parts %s %s' % (sys.argv[1], sys.argv[2]))
 parts = parse_system_parts(sys.argv[1], sys.argv[2])
@@ -66,14 +66,15 @@ print('limits', limits)
 ###############################################################################
 
 dimensions_inches = (64, 32)
-mrows_between_parts = 1
+gap_ratio_by_inch = 1e-4
 colors = {
     'default': (1.0, 0.796, 0.792),
     'hdd': (0.878, 1.0, 0.792)
 }
 
 def render(parts, limits, table, host, outfile):
-    (max_level, max_rows_per_level, partition_length) = limits
+    (max_level, max_rows_in_partition, partition_length) = limits
+    gap_rows = gap_ratio_by_inch * max_rows_in_partition * dimensions_inches[1]
 
     matplotlib.rcParams.update({
       'font.size': 7
@@ -90,10 +91,10 @@ def render(parts, limits, table, host, outfile):
             v * step_function(level, max_level)))
 
     f, a = matplotlib.pyplot.subplots(figsize=dimensions_inches)
-    a.set_title('Parts in partitions: %s (%s)' % (table, host))
+    a.set_title('''Parts in partitions: %s (%s)
+Note: discount gaps by %d rows each''' % (table, host, gap_rows))
 
     bars = {}
-    scale = 1e+9
     for pn in parts.keys():
         y = 0
         for level in parts[pn].keys():
@@ -101,10 +102,11 @@ def render(parts, limits, table, host, outfile):
                 label = (disk_name, level)
                 if label not in bars:
                     bars[label] = {'x': [], 'h': [], 'y': []}
+                rows_render = max([rows, gap_rows])
                 bars[label]['x'].append(datetime.datetime.fromtimestamp(int(pn)))
-                bars[label]['h'].append(rows / scale)
-                bars[label]['y'].append(y / scale)
-                y += rows + mrows_between_parts * 1e+6
+                bars[label]['h'].append(rows_render)
+                bars[label]['y'].append(y)
+                y += rows_render + gap_rows
 
     for label in bars.keys():
         a.bar(bars[label]['x'],
@@ -116,7 +118,7 @@ def render(parts, limits, table, host, outfile):
 
     a.xaxis_date()
     a.set_xlabel('partition')
-    a.set_ylabel('part size [B rows]')
+    a.set_ylabel('accumulated part size in partition [rows]')
     f.legend(loc='upper left', bbox_to_anchor=(0.13, 0.87))
     f.savefig(outfile, bbox_inches='tight')
     f.clf()
