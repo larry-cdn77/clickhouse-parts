@@ -6,6 +6,8 @@ import matplotlib
 import matplotlib.pyplot
 import clickhouse_driver
 
+__version__ = '0.1.0'
+
 if len(sys.argv) != 4:
     print('''usage: clickhouse-parts HOST DBTABLE OUTFILE
 
