@@ -6,16 +6,18 @@ import matplotlib
 import matplotlib.pyplot
 import clickhouse_driver
 
-__version__ = '0.1.0'
+__version__ = '0.1.1'
 
-if len(sys.argv) != 4:
-    print('''usage: clickhouse-parts HOST DBTABLE OUTFILE
+if len(sys.argv) != 5:
+    print('''usage: clickhouse-parts HOST DBTABLE OUTFILE LAYOUT
 
 Read system.parts for given db.table and visualise into a PNG file
 
 - only given server, does not extend to other cluster nodes
 - uses native port 9000, default user and empty password
-- recognises disk_name 'hdd' as cold storage''')
+- recognises disk_name 'hdd' as cold storage
+
+LAYOUT is big or small''')
     sys.exit(2)
 
 def parse_system_parts(host, db_table):
@@ -67,16 +69,28 @@ print('limits', limits)
 # rendering                                                                   #
 ###############################################################################
 
-dimensions_inches = (64, 32)
-gap_ratio_by_inch = 1e-4
+layouts = {
+    'big': {
+        'dimensions_inches': (64, 32),
+        'gap_ratio_by_inch': 1e-4,
+    },
+    'small': {
+        # match Collectd Graph Panel's 597x341
+        # found Debian matplotlib 3.4.1 DPI weird so using magic numbers
+        'dimensions_inches': (7.05, 3.49),
+        'gap_ratio_by_inch': 1e-4,
+    },
+}
+
 colors = {
     'default': (1.0, 0.796, 0.792),
     'hdd': (0.878, 1.0, 0.792)
 }
 
-def render(parts, limits, table, host, outfile):
+def render(parts, limits, table, host, outfile, layout):
     (max_level, max_rows_in_partition, partition_length) = limits
-    gap_rows = gap_ratio_by_inch * max_rows_in_partition * dimensions_inches[1]
+    gap_rows = layouts[layout]['gap_ratio_by_inch'] * max_rows_in_partition * \
+        layouts[layout]['dimensions_inches'][1]
 
     matplotlib.rcParams.update({
       'font.size': 7
@@ -92,9 +106,11 @@ def render(parts, limits, table, host, outfile):
         return matplotlib.colors.hsv_to_rgb((h, s,
             v * step_function(level, max_level)))
 
-    f, a = matplotlib.pyplot.subplots(figsize=dimensions_inches)
-    a.set_title('''Parts in partitions: %s (%s)
-Note: discount gaps by %d rows each''' % (table, host, gap_rows))
+    f, a = matplotlib.pyplot.subplots(figsize=layouts[layout]['dimensions_inches'])
+    title = 'Parts in partitions: %s (%s)' % (table, host)
+    if layout == 'big':
+        title += '\nNote: discount gaps by %d rows each' % gap_rows
+    a.set_title(title)
 
     bars = {}
     for pn in parts.keys():
@@ -126,5 +142,5 @@ Note: discount gaps by %d rows each''' % (table, host, gap_rows))
     f.clf()
     matplotlib.pyplot.close(f)
 
-print('render %s' % sys.argv[3])
-render(parts, limits, sys.argv[2], sys.argv[1], sys.argv[3])
+print('render %s (%s)' % (sys.argv[3], sys.argv[4]))
+render(parts, limits, sys.argv[2], sys.argv[1], sys.argv[3], sys.argv[4])
