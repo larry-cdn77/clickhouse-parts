@@ -6,7 +6,7 @@ import matplotlib
 import matplotlib.pyplot
 import clickhouse_driver
 
-__version__ = '0.1.1'
+__version__ = '0.2'
 
 if len(sys.argv) != 5:
     print('''usage: clickhouse-parts HOST DBTABLE OUTFILE LAYOUT
@@ -16,6 +16,7 @@ Read system.parts for given db.table and visualise into a PNG file
 - only given server, does not extend to other cluster nodes
 - uses native port 9000, default user and empty password
 - recognises disk_name 'hdd' as cold storage
+- groups partitions if there are too many
 
 LAYOUT is big or small''')
     sys.exit(2)
@@ -23,62 +24,64 @@ LAYOUT is big or small''')
 def parse_system_parts(host, db_table):
     parts = {}
     for (
-            pn,
-            level,
-            rows,
-            disk_name
+            pn, level, rows, disk_name
         ) in clickhouse_driver.Client(
         host=host, port=9000, user='default', password='').execute('''
         SELECT
-            partition_id,
-            level,
-            rows,
-            disk_name
+            partition_id, level, rows, disk_name
         FROM system.parts
-        WHERE database || '.' || table = '%s'
+        WHERE (database || '.' || table) = '%s'
         ORDER BY partition, level, rows
         ''' % db_table):
         if pn not in parts:
-            parts[pn] = {}
-        if level not in parts[pn]:
-            parts[pn][level] = []
-        parts[pn][level].append((rows, disk_name))
+            parts[pn] = []
+        parts[pn].append((rows, level, disk_name))
     return parts
 
 def find_limits(parts):
     max_level = 0
-    max_rows_in_partition = 0
+    max_rows_in_pn = 0
     for pn in parts.keys():
-        for level in parts[pn].keys():
+        rows_in_pn = 0
+        for (rows, level, disk_name) in parts[pn]:
             max_level = max([level, max_level])
-            rows_level = 0
-            for (rows, disk_name) in parts[pn][level]:
-                rows_level += rows
-        max_rows_in_partition = max([rows_level, max_rows_in_partition])
-    keys = list(parts.keys())
-    partition_length = int(keys[1]) - int(keys[0])
-    return (max_level, max_rows_in_partition, partition_length)
+            rows_in_pn += rows
+        max_rows_in_pn = max([rows_in_pn, max_rows_in_pn])
 
-print('parse system.parts %s %s' % (sys.argv[1], sys.argv[2]))
-parts = parse_system_parts(sys.argv[1], sys.argv[2])
+    # heuristic: determine duratino from fresh partitions not old
+    keys = list(sorted(parts.keys()))
+    partition_duration = int(keys[-1]) - int(keys[-2])
 
-limits = find_limits(parts)
-print('limits', limits)
+    return (max_level, max_rows_in_pn, partition_duration)
 
-###############################################################################
-# rendering                                                                   #
-###############################################################################
+def rescale(parts, max_partitions_on_screen):
+    w = int(len(parts.keys()) / max_partitions_on_screen) + 1
+    i = 0
+    pn0 = ''
+    rescaled = {}
+    for pn in sorted(parts.keys()):
+        if i % w == 0:
+            pn0 = pn
+            rescaled[pn0] = []
+        for p in parts[pn]:
+            rescaled[pn0].append(p)
+        if (i + 1) % w == 0 or i + 1 == len(parts.keys()):
+            pass
+        i += 1
+    return (rescaled, w)
 
 layouts = {
     'big': {
         'dimensions_inches': (64, 32),
         'gap_ratio_by_inch': 1e-4,
+        'max_partitions_on_screen': 256,
     },
     'small': {
         # match Collectd Graph Panel's 597x341
         # found Debian matplotlib 3.4.1 DPI weird so using magic numbers
         'dimensions_inches': (7.05, 3.49),
         'gap_ratio_by_inch': 1e-4,
+        'max_partitions_on_screen': 32,
     },
 }
 
@@ -87,16 +90,15 @@ colors = {
     'hdd': (0.878, 1.0, 0.792)
 }
 
-def render(parts, limits, table, host, outfile, layout):
-    (max_level, max_rows_in_partition, partition_length) = limits
-    gap_rows = layouts[layout]['gap_ratio_by_inch'] * max_rows_in_partition * \
+def render(parts, limits, w, host, table, outfile, layout):
+    (max_level, max_rows_in_pn, partition_duration) = limits
+    gap_rows = layouts[layout]['gap_ratio_by_inch'] * max_rows_in_pn * \
         layouts[layout]['dimensions_inches'][1]
 
     matplotlib.rcParams.update({
       'font.size': 7
     })
-    def make_color(label, max_level):
-        (disk_name, level) = label
+    def make_color(disk_name, level, max_level):
         def step_function(level, max_level): # highlight initial levels
             if level <= 3:
                 return 2 * level / 8.0
@@ -108,6 +110,8 @@ def render(parts, limits, table, host, outfile, layout):
 
     f, a = matplotlib.pyplot.subplots(figsize=layouts[layout]['dimensions_inches'])
     title = 'Parts in partitions: %s (%s)' % (table, host)
+    if w > 1:
+        title += '\nPartitions combined into groups of %d' % w
     if layout == 'big':
         title += '\nNote: discount gaps by %d rows each' % gap_rows
     a.set_title(title)
@@ -115,24 +119,32 @@ def render(parts, limits, table, host, outfile, layout):
     bars = {}
     for pn in parts.keys():
         y = 0
-        for level in parts[pn].keys():
-            for (rows, disk_name) in parts[pn][level]:
-                label = (disk_name, level)
-                if label not in bars:
-                    bars[label] = {'x': [], 'h': [], 'y': []}
+        groups = {}
+        for (rows, level, disk_name) in parts[pn]:
+            group = (disk_name, level)
+            if group not in groups:
+                groups[group] = []
+            groups[group].append(rows)
+        for group in sorted(groups.keys()):
+            if group not in bars:
+                bars[group] = {'x': [], 'h': [], 'y': []}
+            for rows in sorted(groups[group]):
                 rows_render = max([rows, gap_rows])
-                bars[label]['x'].append(datetime.datetime.fromtimestamp(int(pn)))
-                bars[label]['h'].append(rows_render)
-                bars[label]['y'].append(y)
+                bars[group]['x'].append(datetime.datetime.fromtimestamp(int(pn)))
+                bars[group]['h'].append(rows_render)
+                bars[group]['y'].append(y)
                 y += rows_render + gap_rows
 
-    for label in bars.keys():
-        a.bar(bars[label]['x'],
-            bars[label]['h'],
-            datetime.timedelta(seconds=(partition_length * 0.85)),
-            bars[label]['y'],
-            color=make_color(label, max_level),
-            label=('%s level %d' % label))
+    # 'Stacked bars can be achieved by passing individual bottom values per bar'
+    # https://matplotlib.org/stable/gallery/lines_bars_and_markers/bar_stacked.html
+    for group in bars.keys():
+        (disk_name, level) = group
+        a.bar(bars[group]['x'],
+            bars[group]['h'],
+            datetime.timedelta(seconds=(partition_duration * 0.85)),
+            bars[group]['y'],
+            color=make_color(disk_name, level, max_level),
+            label=('%s level %d' % (disk_name, level)))
 
     a.xaxis_date()
     a.set_xlabel('partition')
@@ -142,5 +154,14 @@ def render(parts, limits, table, host, outfile, layout):
     f.clf()
     matplotlib.pyplot.close(f)
 
+print('parse system.parts %s %s' % (sys.argv[1], sys.argv[2]))
+parts = parse_system_parts(sys.argv[1], sys.argv[2])
+
+(parts, w) = rescale(parts, layouts[sys.argv[4]]['max_partitions_on_screen'])
+print('scaled down by a factor of', w, len(parts))
+
+limits = find_limits(parts)
+print('limits', limits)
+
 print('render %s (%s)' % (sys.argv[3], sys.argv[4]))
-render(parts, limits, sys.argv[2], sys.argv[1], sys.argv[3], sys.argv[4])
+render(parts, limits, w, sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])
