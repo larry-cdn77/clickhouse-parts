@@ -55,7 +55,7 @@ def downsample(parts, partitions, max_partitions_to_show):
     # factor = how many original partitions make a downsampled one
     dsfactor = int(len(partitions) / max_partitions_to_show) + 1
     if dsfactor == 1:
-        return
+        return parts, partitions, 1
 
     # length = downsampled partition in partition ID units
     # note heuristic to determine partition length from fresh partitions
