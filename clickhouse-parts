@@ -34,7 +34,7 @@ if len(sys.argv) >= 5:
 def parse_system_parts(host, db_table):
     parts = {}
     partitions = {}
-    for (disk_name, level, pid, count) in clickhouse_driver.Client(
+    for (disk_name, level, pid_query, count) in clickhouse_driver.Client(
         host=host, port=9000, user='default', password='').execute('''
         SELECT disk_name, level, partition_id, count()
         FROM system.parts
@@ -46,6 +46,11 @@ def parse_system_parts(host, db_table):
             parts[disk_name] = {}
         if level not in parts[disk_name]:
             parts[disk_name][level] = {}
+        try: # coarse partitions are YYYYmmdd strings
+            pid = int(datetime.datetime.strptime(pid_query,
+                '%Y%m%d').replace(tzinfo=datetime.timezone.utc).timestamp())
+        except ValueError: # fine partitions are epoch numbers
+            pid = int(pid_query)
         parts[disk_name][level][pid] = count
         if pid not in partitions:
             partitions[pid] = []
