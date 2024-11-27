@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 import datetime
 import os
+import re
 import sys
 import matplotlib
 import matplotlib.pyplot
@@ -42,7 +43,7 @@ if len(sys.argv) >= 7:
 def parse_system_parts(host, db_table, quantity):
     parts = {}
     partitions = {}
-    for (disk_name, level, pid_query, count) in clickhouse_driver.Client(
+    for (disk_name_full, level, pid_query, count) in clickhouse_driver.Client(
         host=host, port=9000, user='default', password='').execute('''
         SELECT disk_name, level, partition_id, %s
         FROM system.parts
@@ -50,6 +51,7 @@ def parse_system_parts(host, db_table, quantity):
         GROUP BY disk_name, level, partition_id
         ORDER BY disk_name, level, partition_id
         ''' % (quantity, db_table)):
+        disk_name = re.match(r'[^0-9]*', disk_name_full).group(0)
         if disk_name not in parts:
             parts[disk_name] = {}
         if level not in parts[disk_name]:
