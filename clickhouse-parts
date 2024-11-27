@@ -9,8 +9,8 @@ import clickhouse_driver
 
 __version__ = '0.4'
 
-if len(sys.argv) not in [3, 4, 5, 6, 7]:
-    print('''usage: clickhouse-parts HOST DBTABLE [OUTFILE] [LAYOUT] [QUANTITY] [YMAX]
+if len(sys.argv) not in [5, 6, 7, 8, 9]:
+    print('''usage: clickhouse-parts HOST USER PASSWORD DBTABLE [OUTFILE] [LAYOUT] [QUANTITY] [YMAX]
 
 Read system.parts for given db.table and visualise into OUTFILE
 (defaults to out.png)
@@ -26,25 +26,27 @@ LAYOUT defaults to normal and can be set to `big' or `cgp' (597x341)''')
     sys.exit(2)
 
 host = sys.argv[1]
-db_table = sys.argv[2]
+user = sys.argv[2]
+password = sys.argv[3]
+db_table = sys.argv[4]
 out_file = 'out.png'
-if len(sys.argv) >= 4:
-    out_file = sys.argv[3]
-layout = 'normal'
-if len(sys.argv) >= 5:
-    layout = sys.argv[4]
-quantity = 'count()'
 if len(sys.argv) >= 6:
-    quantity = sys.argv[5]
-ymax = None
+    out_file = sys.argv[5]
+layout = 'normal'
 if len(sys.argv) >= 7:
-    ymax = int(sys.argv[6])
+    layout = sys.argv[6]
+quantity = 'count()'
+if len(sys.argv) >= 8:
+    quantity = sys.argv[7]
+ymax = None
+if len(sys.argv) >= 9:
+    ymax = int(sys.argv[8])
 
 def parse_system_parts(host, db_table, quantity):
     parts = {}
     partitions = {}
     for (disk_name_full, level, pid_query, count) in clickhouse_driver.Client(
-        host=host, port=9000, user='default', password='').execute('''
+        host=host, port=9000, user=user, password=password).execute('''
         SELECT disk_name, level, partition_id, %s
         FROM system.parts
         WHERE (database || '.' || table) = '%s'
