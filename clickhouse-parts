@@ -16,11 +16,11 @@ Read system.parts for given db.table and visualise into OUTFILE
 (defaults to out.png)
 
 - only given server, does not extend to other cluster nodes
-- uses native port 9000, default user and empty password
 - separates disk names and uses different colours ('hdd' and 'default' or 'ssd')
 - groups partitions if there are too many
 - optional MAXPARTS sets y-axis upper limit (usefuel for comparisons)
 - QUANTITY defaults to 'count()' (you might want to plot 'sum(rows)' instead)
+- uses native port 9000
 
 LAYOUT defaults to normal and can be set to `big' or `cgp' (597x341)''')
     sys.exit(2)
