@@ -20,12 +20,13 @@ Read system.parts for given db.table and visualise into OUTFILE
 - groups partitions if there are too many
 - optional MAXPARTS sets y-axis upper limit (usefuel for comparisons)
 - QUANTITY defaults to 'count()' (you might want to plot 'sum(rows)' instead)
-- uses native port 9000
+- assumes native interface with TLS at port 9440
 
 LAYOUT defaults to normal and can be set to `big' or `cgp' (597x341)''')
     sys.exit(2)
 
 host = sys.argv[1]
+port = 9440
 user = sys.argv[2]
 password = sys.argv[3]
 db_table = sys.argv[4]
@@ -42,11 +43,11 @@ ymax = None
 if len(sys.argv) >= 9:
     ymax = int(sys.argv[8])
 
-def parse_system_parts(host, db_table, quantity):
+def parse_system_parts(host, port, db_table, quantity):
     parts = {}
     partitions = {}
     for (disk_name_full, level, pid_query, count) in clickhouse_driver.Client(
-        host=host, port=9000, user=user, password=password).execute('''
+        host=host, port=port, secure=True, user=user, password=password).execute('''
         SELECT disk_name, level, partition_id, %s
         FROM system.parts
         WHERE (database || '.' || table) = '%s'
@@ -181,7 +182,7 @@ def render(parts, partitions, max_level, dsfactor, host, table, out_file, layout
     matplotlib.pyplot.close(f)
 
 print('parse system.parts', host, db_table)
-parts, partitions = parse_system_parts(host, db_table, quantity)
+parts, partitions = parse_system_parts(host, port, db_table, quantity)
 
 parts, partitions, dsfactor = downsample(parts, partitions,
     layouts[layout]['max_partitions_to_show'])
